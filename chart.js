@@ -20,12 +20,25 @@
 
   const $ = (s) => document.querySelector(s);
 
-  /* ---- Price history ---- */
+  /* ---- Price history ----
+     Priority: Alpha Vantage (real daily closes, needs a free key) →
+     Stooq daily CSV (keyless, often CORS-blocked) → deterministic sample walk. */
+  const SYMBOL = 'SPCX';
+
   async function getHistory() {
     const cached = safeParse(localStorage.getItem(HIST_KEY));
     if (cached && Date.now() - cached.ts < HIST_TTL) return cached;
 
-    // Try keyless daily history from Stooq (may be CORS-blocked; that's fine).
+    // 1) Alpha Vantage — real daily OHLC (free key, allows browser CORS).
+    const avKey = localStorage.getItem('spcx.avKey');
+    if (avKey) {
+      try {
+        const series = await fetchAlphaVantage(avKey);
+        return cache({ source: 'Alpha Vantage (daily close)', series });
+      } catch (e) { /* fall through */ }
+    }
+
+    // 2) Stooq keyless daily history (may be CORS-blocked; that's fine).
     try {
       const r = await fetch('https://stooq.com/q/d/l/?s=spcx.us&i=d');
       if (r.ok) {
@@ -35,17 +48,35 @@
           const c = line.split(',');
           return { t: Date.parse(c[0]), v: +c[4] };
         }).filter((p) => p.t && p.v);
-        if (series.length > 3) {
-          const out = { ts: Date.now(), source: 'Stooq (daily close)', series };
-          localStorage.setItem(HIST_KEY, JSON.stringify(out));
-          return out;
-        }
+        if (series.length > 3) return cache({ source: 'Stooq (daily close)', series });
       }
     } catch (e) { /* fall through to synth */ }
 
-    const out = { ts: Date.now(), source: 'Sample data (no live history)', series: synth() };
+    // 3) No real source available — deterministic placeholder walk.
+    return cache({ source: 'Sample data (no live history)', series: synth() });
+  }
+
+  function cache(out) {
+    out.ts = Date.now();
     localStorage.setItem(HIST_KEY, JSON.stringify(out));
     return out;
+  }
+
+  async function fetchAlphaVantage(key) {
+    const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${SYMBOL}` +
+                `&outputsize=compact&apikey=${encodeURIComponent(key)}`;
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('alphavantage ' + r.status);
+    const j = await r.json();
+    const ts = j['Time Series (Daily)'];
+    // AV returns Note/Information on rate-limit, Error Message on bad symbol/key.
+    if (!ts) throw new Error(j.Note || j.Information || j['Error Message'] || 'alphavantage no data');
+    const series = Object.entries(ts)
+      .map(([d, o]) => ({ t: Date.parse(d), v: +o['4. close'] }))
+      .filter((p) => p.t && p.v)
+      .sort((a, b) => a.t - b.t);
+    if (series.length < 2) throw new Error('alphavantage empty');
+    return series;
   }
 
   // Deterministic pseudo price walk from IPO day to today, ending near last quote.

@@ -9,6 +9,7 @@ const CACHE_TTL = 25 * 60 * 1000; // 25 min for launch cache (API is rate-limite
 
 const LS = {
   apiKey: 'spcx.apiKey',
+  avKey: 'spcx.avKey',         // Alpha Vantage key for real price history
   calls: 'spcx.calls.v2',      // bumped: v2 ships researched real dates
   lockups: 'spcx.lockups.v2',
   launchCache: 'spcx.launchCache',
@@ -347,6 +348,19 @@ function init() {
     save(LS.apiKey, keyInput.value.trim());
     $('#providerNote').textContent = 'Saved. Refreshing…';
     loadPrice();
+  });
+
+  // Alpha Vantage key (real chart history)
+  const avInput = $('#avKeyInput');
+  avInput.value = load(LS.avKey, '');
+  $('#avNote').textContent = avInput.value
+    ? 'Using Alpha Vantage for real daily history.'
+    : 'No key — chart uses Stooq/sample history. Add a key for the real price path.';
+  $('#saveAvKeyBtn').addEventListener('click', () => {
+    save(LS.avKey, avInput.value.trim());
+    localStorage.removeItem('spcx.hist'); // drop cached history so it refetches
+    $('#avNote').textContent = 'Saved. Reloading chart…';
+    if (window.SPCXChart) window.SPCXChart.render();
   });
 
   // Add buttons
