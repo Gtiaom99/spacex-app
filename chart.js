@@ -1,13 +1,22 @@
 'use strict';
-/* SPCX price chart: line + future event markers. Vanilla canvas, no libs. */
+/* SPCX price chart: line + future event markers. Vanilla canvas, no libs.
+   Default window spans from the IPO date onward; the time axis is zoomable
+   (wheel / pinch) and pannable (drag), with double-click / double-tap reset. */
 (function () {
   const DAY = 86400000;
+  const MIN_SPAN = 14 * DAY;   // closest zoom-in
   const COLORS = { price: '#eef2ff', earn: '#4f8cff', shares: '#f5a623', launch: '#26d07c', today: '#8892b8', ipo: '#5566aa' };
   const HIST_KEY = 'spcx.hist';
   const HIST_TTL = 6 * 3600 * 1000;
 
   let tf = localStorage.getItem('spcx.tf') || 'D';
   let histLoaded = false;
+
+  // Time-axis viewport state.
+  let view = null;                 // { t0, t1 } currently shown; null = show full extent
+  let bounds = { t0: 0, t1: 0 };   // full extent [IPO, last event]
+  let metrics = null;              // { padL, plotW, t0, t1 } from last draw, for pixel<->time
+  let wired = false;               // interaction handlers attached once
 
   const $ = (s) => document.querySelector(s);
 
@@ -88,6 +97,18 @@
   function safeParse(s) { try { return JSON.parse(s); } catch { return null; } }
   const money = (n) => '$' + n.toFixed(n < 100 ? 2 : 1);
 
+  /* ---- Viewport helpers ---- */
+  // Keep a viewport inside the full extent, honoring the min-zoom span.
+  function clampView(t0, t1) {
+    const fullSpan = bounds.t1 - bounds.t0;
+    let span = Math.min(fullSpan, Math.max(MIN_SPAN, t1 - t0));
+    t1 = t0 + span;
+    if (t0 < bounds.t0) { t0 = bounds.t0; t1 = t0 + span; }
+    if (t1 > bounds.t1) { t1 = bounds.t1; t0 = t1 - span; }
+    if (t0 < bounds.t0) t0 = bounds.t0; // span == fullSpan
+    return { t0, t1 };
+  }
+
   /* ---- Draw ---- */
   async function render() {
     if (!window.SPCXData) return;
@@ -97,9 +118,24 @@
     const hist = await getHistory();
     histLoaded = true;
     const series = aggregate(hist.series.slice().sort((a, b) => a.t - b.t), tf);
-    draw(canvas, series, hist.source);
+
+    // Full extent: IPO -> last scheduled event (ignore far-future TBD launch
+    // placeholders when sizing the horizon).
+    const now = Date.now();
+    const ipoT = Date.parse(SPCXData().ipo.date);
+    const events = collectEvents();
+    const rangeEvents = events.filter((e) => !(e.cat === 'launch' && e.t > now + 550 * DAY));
+    const lastEvent = Math.max(now, ...rangeEvents.map((e) => e.t));
+    bounds = { t0: ipoT, t1: lastEvent + (lastEvent - ipoT) * 0.04 };
+
+    // Default viewport = full extent (starts at IPO). Re-clamp if data shifted.
+    view = view ? clampView(view.t0, view.t1) : { t0: bounds.t0, t1: bounds.t1 };
+
+    draw(canvas, series, events, now, view.t0, view.t1);
     updateHeader(series);
-    $('#chartNote').textContent = hist.source + ' · markers = scheduled events (see other tab). Future dates are estimates.';
+    wireInteractions(canvas);
+    const hint = 'scroll / pinch to zoom · drag to pan · double-click to reset';
+    $('#chartNote').textContent = hist.source + ' · ' + hint;
   }
 
   function updateHeader(series) {
@@ -117,7 +153,7 @@
     }
   }
 
-  function draw(canvas, series, source) {
+  function draw(canvas, series, events, now, t0, t1) {
     const dpr = window.devicePixelRatio || 1;
     const cssW = canvas.clientWidth || 340;
     const cssH = 300;
@@ -131,39 +167,24 @@
     const plotW = cssW - padL - padR;
     const plotH = cssH - padT - padB;
 
-    const now = Date.now();
-    const ipoT = Date.parse(SPCXData().ipo.date);
-    const events = collectEvents();
+    metrics = { padL, plotW, t0, t1 }; // for pixel<->time in interaction handlers
 
-    // time window — each timeframe frames a sensible past + future horizon so
-    // the price line stays readable and the right amount of future is shown.
-    // Ignore far-future TBD launch placeholders (e.g. "Dec 31") when sizing.
-    const rangeEvents = events.filter((e) => !(e.cat === 'launch' && e.t > now + 550 * DAY));
-    const lastEvent = Math.max(now, ...rangeEvents.map((e) => e.t));
-    let t0, t1;
-    if (tf === 'D') {          // near-term: ~6wks back, ~2mo ahead
-      t0 = Math.max(ipoT, now - 45 * DAY);
-      t1 = now + 60 * DAY;
-    } else if (tf === 'W') {    // medium: since IPO, ~7mo ahead (all 2026 events)
-      t0 = ipoT;
-      t1 = now + 220 * DAY;
-    } else {                   // M — full picture: IPO → last event (Musk 2027)
-      t0 = ipoT;
-      t1 = lastEvent + (lastEvent - t0) * 0.04;
-    }
-
-    const vis = series.filter((p) => p.t >= t0 && p.t <= now);
-    const pool = vis.length ? vis : series.slice(-2);
+    // Price points visible in this window (past only — no future prices).
+    const vis = series.filter((p) => p.t >= t0 && p.t <= Math.min(now, t1));
+    const pool = vis.length ? vis : series.filter((p) => p.t <= now).slice(-2);
     let lo = Math.min(SPCXData().ipo.price, ...pool.map((p) => p.v));
     let hi = Math.max(SPCXData().ipo.price, ...pool.map((p) => p.v));
+    if (!isFinite(lo) || !isFinite(hi)) { lo = SPCXData().ipo.price * 0.8; hi = SPCXData().ipo.price * 1.2; }
     const pad = (hi - lo) * 0.08 || 5; lo -= pad; hi += pad;
 
     const X = (t) => padL + ((t - t0) / (t1 - t0)) * plotW;
     const Y = (v) => padT + (1 - (v - lo) / (hi - lo)) * plotH;
 
-    // future shading
-    ctx.fillStyle = 'rgba(255,255,255,0.025)';
-    ctx.fillRect(X(now), padT, X(t1) - X(now), plotH);
+    // future shading (only if "now" falls inside the window)
+    if (now > t0 && now < t1) {
+      ctx.fillStyle = 'rgba(255,255,255,0.025)';
+      ctx.fillRect(X(now), padT, X(t1) - X(now), plotH);
+    }
 
     // horizontal grid + y labels
     ctx.font = '11px system-ui, sans-serif';
@@ -205,8 +226,12 @@
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(cssW - padR, y); ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = COLORS.ipo; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-      ctx.fillText('IPO $135', padL + 2, y - 2);
+      ctx.fillText('IPO ' + money(SPCXData().ipo.price), padL + 2, y - 2);
     }
+
+    // clip event/price drawing to the plot so zoomed-out markers never spill
+    ctx.save();
+    ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
 
     // event vertical lines + top triangles (offset triangles per category so
     // same-date events of different categories both stay visible)
@@ -222,10 +247,12 @@
     });
 
     // today divider
-    const xNow = X(now);
-    ctx.strokeStyle = COLORS.today; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(xNow, padT); ctx.lineTo(xNow, padT + plotH); ctx.stroke();
-    ctx.setLineDash([]);
+    if (now > t0 && now < t1) {
+      const xNow = X(now);
+      ctx.strokeStyle = COLORS.today; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(xNow, padT); ctx.lineTo(xNow, padT + plotH); ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     // price line + fill (past only)
     if (vis.length > 1) {
@@ -245,10 +272,111 @@
       const last = vis[vis.length - 1];
       ctx.fillStyle = COLORS.price;
       ctx.beginPath(); ctx.arc(X(last.t), Y(last.v), 3.5, 0, Math.PI * 2); ctx.fill();
-    } else {
+    }
+    ctx.restore();
+
+    if (vis.length <= 1) {
       ctx.fillStyle = '#66708f'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText('No price history for this range', padL + plotW / 2, padT + plotH / 2);
     }
+  }
+
+  /* ---- Zoom / pan interaction ---- */
+  function timeAtX(clientX, canvas) {
+    if (!metrics) return null;
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const frac = (x - metrics.padL) / metrics.plotW;
+    return metrics.t0 + frac * (metrics.t1 - metrics.t0);
+  }
+
+  function zoomAround(anchorT, factor, canvas) {
+    if (!view) return;
+    const span = view.t1 - view.t0;
+    const fullSpan = bounds.t1 - bounds.t0;
+    const newSpan = Math.min(fullSpan, Math.max(MIN_SPAN, span * factor));
+    const rel = span ? (anchorT - view.t0) / span : 0.5;
+    view = clampView(anchorT - rel * newSpan, anchorT - rel * newSpan + newSpan);
+    redraw(canvas);
+  }
+
+  function panByPixels(dxPx, canvas) {
+    if (!view || !metrics) return;
+    const dt = -(dxPx / metrics.plotW) * (view.t1 - view.t0);
+    view = clampView(view.t0 + dt, view.t1 + dt);
+    redraw(canvas);
+  }
+
+  // Redraw synchronously from current state (no refetch) for smooth interaction.
+  function redraw(canvas) {
+    const hist = safeParse(localStorage.getItem(HIST_KEY));
+    if (!hist) { render(); return; }
+    const series = aggregate(hist.series.slice().sort((a, b) => a.t - b.t), tf);
+    draw(canvas, series, collectEvents(), Date.now(), view.t0, view.t1);
+  }
+
+  function wireInteractions(canvas) {
+    if (wired) return;
+    wired = true;
+    canvas.style.touchAction = 'none'; // we handle pan/zoom ourselves
+    canvas.style.cursor = 'grab';
+
+    // Wheel / trackpad zoom, anchored at the cursor.
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const anchor = timeAtX(e.clientX, canvas);
+      if (anchor == null) return;
+      zoomAround(anchor, e.deltaY > 0 ? 1.15 : 1 / 1.15, canvas);
+    }, { passive: false });
+
+    // Pointer-based drag pan + two-finger pinch zoom.
+    const pts = new Map();
+    let lastX = 0, pinchDist = 0, pinchMid = 0;
+
+    canvas.addEventListener('pointerdown', (e) => {
+      canvas.setPointerCapture(e.pointerId);
+      pts.set(e.pointerId, e.clientX);
+      lastX = e.clientX;
+      canvas.style.cursor = 'grabbing';
+      if (pts.size === 2) {
+        const xs = [...pts.values()];
+        pinchDist = Math.abs(xs[0] - xs[1]);
+        pinchMid = (xs[0] + xs[1]) / 2;
+      }
+    });
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, e.clientX);
+      if (pts.size === 2) {
+        const xs = [...pts.values()];
+        const dist = Math.abs(xs[0] - xs[1]) || 1;
+        const mid = (xs[0] + xs[1]) / 2;
+        if (pinchDist) {
+          const anchor = timeAtX(pinchMid, canvas);
+          if (anchor != null) zoomAround(anchor, pinchDist / dist, canvas);
+        }
+        pinchDist = dist; pinchMid = mid;
+      } else if (pts.size === 1) {
+        panByPixels(e.clientX - lastX, canvas);
+        lastX = e.clientX;
+      }
+    });
+
+    const release = (e) => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) pinchDist = 0;
+      if (pts.size === 0) canvas.style.cursor = 'grab';
+    };
+    canvas.addEventListener('pointerup', release);
+    canvas.addEventListener('pointercancel', release);
+
+    // Double-click / double-tap resets to the full IPO->future window.
+    canvas.addEventListener('dblclick', (e) => {
+      e.preventDefault();
+      view = { t0: bounds.t0, t1: bounds.t1 };
+      redraw(canvas);
+    });
   }
 
   /* ---- wire up ---- */

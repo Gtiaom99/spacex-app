@@ -1,4 +1,4 @@
-const CACHE = 'spcx-v3';
+const CACHE = 'spcx-v4';
 const ASSETS = [
   'index.html',
   'styles.css',
