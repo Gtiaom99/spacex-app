@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="35%" r="75%">
+      <stop offset="0%" stop-color="#16224a"/>
+      <stop offset="100%" stop-color="#05070f"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="130" cy="120" r="4" fill="#ffffff" opacity="0.8"/>
+  <circle cx="400" cy="150" r="3" fill="#ffffff" opacity="0.7"/>
+  <circle cx="360" cy="90" r="2.5" fill="#ffffff" opacity="0.6"/>
+  <circle cx="110" cy="360" r="3" fill="#ffffff" opacity="0.6"/>
+  <!-- rocket -->
+  <g transform="translate(256 268) rotate(45)">
+    <path d="M0 -120 C40 -80 44 -10 44 40 L-44 40 C-44 -10 -40 -80 0 -120 Z" fill="#eef2ff"/>
+    <circle cx="0" cy="-40" r="20" fill="#4f8cff"/>
+    <path d="M-44 20 L-80 70 L-44 55 Z" fill="#4f8cff"/>
+    <path d="M44 20 L80 70 L44 55 Z" fill="#4f8cff"/>
+    <path d="M-20 40 L0 110 L20 40 Z" fill="#ff5c6c"/>
+  </g>
+</svg>

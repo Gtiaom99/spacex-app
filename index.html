@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#05070f" />
+  <title>SPCX Tracker</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <div>
+        <h1>SPCX</h1>
+        <p class="brand-sub">SpaceX · NASDAQ</p>
+      </div>
+    </div>
+    <button id="refreshBtn" class="icon-btn" title="Refresh" aria-label="Refresh data">⟳</button>
+  </header>
+
+  <nav class="viewtabs" id="viewTabs">
+    <button data-view="list" class="active">📅 Dates</button>
+    <button data-view="chart">📈 Chart</button>
+  </nav>
+
+  <main>
+    <!-- ============ CHART VIEW ============ -->
+    <div id="chartView" hidden>
+      <section class="card chart-card">
+        <div class="chart-head">
+          <div>
+            <div class="chart-price" id="chartPrice">—</div>
+            <div class="price-change" id="chartChange">SPCX</div>
+          </div>
+          <div class="tf-group" id="tfGroup">
+            <button data-tf="D" class="active">D</button>
+            <button data-tf="W">W</button>
+            <button data-tf="M">M</button>
+          </div>
+        </div>
+        <div class="canvas-wrap"><canvas id="priceChart"></canvas></div>
+        <div class="legend" id="chartLegend">
+          <span class="lg"><i class="sw price"></i>Price</span>
+          <span class="lg"><i class="sw earn"></i>Earnings call</span>
+          <span class="lg"><i class="sw shares"></i>Shares freed</span>
+          <span class="lg"><i class="sw launch"></i>Launch</span>
+          <span class="lg"><i class="sw today"></i>Today</span>
+        </div>
+        <div class="fine" id="chartNote"></div>
+      </section>
+    </div>
+
+    <!-- ============ LIST VIEW ============ -->
+    <div id="listView">
+    <!-- PRICE -->
+    <section class="card price-card" id="priceCard">
+      <div class="price-top">
+        <div>
+          <div class="price-value" id="priceValue">—</div>
+          <div class="price-change" id="priceChange">Loading price…</div>
+        </div>
+        <div class="price-meta" id="priceMeta"></div>
+      </div>
+      <div class="price-stats" id="priceStats"></div>
+      <div class="updated" id="priceUpdated"></div>
+    </section>
+
+    <!-- NEXT LAUNCH COUNTDOWN -->
+    <section class="card countdown-card" id="countdownCard">
+      <div class="card-label">Next Starship flight</div>
+      <div class="countdown-name" id="nextLaunchName">Loading…</div>
+      <div class="countdown-timer" id="countdownTimer">—</div>
+      <div class="countdown-when" id="nextLaunchWhen"></div>
+    </section>
+
+    <!-- LAUNCHES LIST -->
+    <section class="card">
+      <div class="card-head">
+        <h2>🚀 Starship launches & attempts</h2>
+      </div>
+      <ul class="list" id="launchList"><li class="muted">Loading launches…</li></ul>
+      <div class="updated" id="launchUpdated"></div>
+    </section>
+
+    <!-- INVESTOR CALLS -->
+    <section class="card">
+      <div class="card-head">
+        <h2>📞 Investor & earnings calls</h2>
+        <button class="add-btn" data-add="calls">+ Add</button>
+      </div>
+      <ul class="list" id="callsList"></ul>
+    </section>
+
+    <!-- LOCK-UP / SHARE UNLOCKS -->
+    <section class="card">
+      <div class="card-head">
+        <h2>🔓 Shares freed to market</h2>
+        <button class="add-btn" data-add="lockups">+ Add</button>
+      </div>
+      <ul class="list" id="lockupsList"></ul>
+      <p class="fine">Lock-up dates are estimates you can edit. Verify against SEC filings (S-1 / prospectus).</p>
+    </section>
+
+    <!-- SETTINGS -->
+    <section class="card">
+      <div class="card-head"><h2>⚙️ Settings</h2></div>
+      <label class="field">
+        <span>Finnhub API key (free at finnhub.io)</span>
+        <input type="password" id="apiKeyInput" placeholder="Paste key for live quotes" autocomplete="off" />
+      </label>
+      <button id="saveKeyBtn" class="primary-btn">Save key</button>
+      <p class="fine" id="providerNote"></p>
+      <button id="clearCacheBtn" class="ghost-btn full">🧹 Clear cache & reload</button>
+      <p class="fine">Forces the app to re-download the latest code and data.</p>
+    </section>
+
+    <p class="disclaimer">
+      Not investment advice. Prices may be delayed. SPCX went public on NASDAQ on
+      June 12, 2026. Data from Finnhub / Stooq and The Space Devs.
+    </p>
+    </div><!-- /listView -->
+  </main>
+
+  <!-- Add/Edit event dialog -->
+  <dialog id="eventDialog">
+    <form method="dialog" id="eventForm">
+      <h3 id="dialogTitle">Add event</h3>
+      <label class="field"><span>Title</span><input type="text" id="evtTitle" required /></label>
+      <label class="field"><span>Date</span><input type="date" id="evtDate" required /></label>
+      <label class="field"><span>Note (optional)</span><input type="text" id="evtNote" /></label>
+      <div class="dialog-actions">
+        <button type="button" id="evtDelete" class="danger-btn" hidden>Delete</button>
+        <div class="spacer"></div>
+        <button type="button" id="evtCancel" class="ghost-btn">Cancel</button>
+        <button type="submit" class="primary-btn">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+  <script src="chart.js"></script>
+</body>
+</html>
