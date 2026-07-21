@@ -30,12 +30,21 @@
     if (cached && Date.now() - cached.ts < HIST_TTL) return cached;
 
     // 1) Alpha Vantage — real daily OHLC (free key, allows browser CORS).
+    //    This is the preferred, fully-real source.
     const avKey = localStorage.getItem('spcx.avKey');
     if (avKey) {
       try {
         const series = await fetchAlphaVantage(avKey);
         return cache({ source: 'Alpha Vantage (daily close)', series });
-      } catch (e) { /* fall through */ }
+      } catch (e) {
+        // AV unavailable (usually a free-tier rate-limit). Keep showing the last
+        // good AV chart rather than dropping to the modeled line.
+        if (cached && /Alpha Vantage/.test(cached.source || '')) {
+          cached.ts = Date.now(); // extend so we don't hammer the rate limit
+          localStorage.setItem(HIST_KEY, JSON.stringify(cached));
+          return cached;
+        }
+      }
     }
 
     // 2) Real anchors (IPO price + recorded daily + today's live quote) with the
