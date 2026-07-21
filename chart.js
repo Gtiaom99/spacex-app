@@ -38,10 +38,12 @@
       } catch (e) { /* fall through */ }
     }
 
-    // 2) Real closes recorded from the live quote (works even when no history
-    //    API carries this brand-new symbol). Always include today's live quote.
-    const real = buildRecordedSeries();
-    if (real.length >= 2) return cache({ source: 'Live quote (recorded daily)', series: real });
+    // 2) Real anchors (IPO price + recorded daily + today's live quote) with the
+    //    IPO->present gap filled by a smooth modeled curve, so the chart reads
+    //    like an online chart yet honors every real price we have. As real daily
+    //    points accumulate, the modeled filler shrinks and the recent line is real.
+    const filled = buildFilledSeries();
+    if (filled.length >= 2) return cache({ source: 'Modeled since IPO · real daily updates', series: filled });
 
     // 3) Stooq keyless daily history (may be CORS-blocked; that's fine).
     try {
@@ -75,6 +77,37 @@
       else series.push({ t: today, v: q.data.price });
     }
     return series.filter((p) => p.t && p.v != null).sort((a, b) => a.t - b.t);
+  }
+
+  // Take the real anchor points and fill any multi-day gap between consecutive
+  // anchors with a deterministic Brownian-bridge walk (pinned to 0 at both ends),
+  // so the line looks organic but always passes exactly through the real prices.
+  function buildFilledSeries() {
+    const anchors = buildRecordedSeries();
+    if (anchors.length < 2) return synth(); // no real endpoints yet — plain walk
+    const out = [];
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a = anchors[i], b = anchors[i + 1];
+      out.push(a);
+      const gap = Math.round((b.t - a.t) / DAY);
+      if (gap <= 1) continue; // consecutive real days — nothing to fill
+
+      // deterministic RNG seeded from the segment start (stable across renders)
+      let seed = Math.floor(a.t / DAY) & 0x7fffffff;
+      const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff - 0.5; };
+      const amp = Math.max(1.5, ((a.v + b.v) / 2) * 0.035); // daily wiggle size
+
+      const W = [0];                       // random walk W[0..gap]
+      for (let s = 1; s <= gap; s++) W.push(W[s - 1] + rnd() * amp);
+      for (let s = 1; s < gap; s++) {      // interior days only
+        const frac = s / gap;
+        const base = a.v + (b.v - a.v) * frac;      // linear trend a -> b
+        const bridge = W[s] - frac * W[gap];        // 0 at both endpoints
+        out.push({ t: a.t + s * DAY, v: Math.max(1, base + bridge) });
+      }
+    }
+    out.push(anchors[anchors.length - 1]);
+    return out;
   }
 
   function cache(out) {
