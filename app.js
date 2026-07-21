@@ -10,6 +10,7 @@ const CACHE_TTL = 25 * 60 * 1000; // 25 min for launch cache (API is rate-limite
 const LS = {
   apiKey: 'spcx.apiKey',
   avKey: 'spcx.avKey',         // Alpha Vantage key for real price history
+  realHist: 'spcx.realHist',   // real daily closes recorded from live quotes
   calls: 'spcx.calls.v2',      // bumped: v2 ships researched real dates
   lockups: 'spcx.lockups.v2',
   launchCache: 'spcx.launchCache',
@@ -98,6 +99,7 @@ async function loadPrice() {
 
   if (data) {
     save(LS.priceCache, { data, ts: Date.now() });
+    recordRealHistory(data);
     renderPrice(data, Date.now());
   } else {
     const cached = load(LS.priceCache, null);
@@ -110,6 +112,26 @@ async function loadPrice() {
     }
     $('#providerNote').textContent = 'Live fetch failed' + (err ? ` (${err.message})` : '') + '. Using cached value if available.';
   }
+}
+
+/* Build a genuinely real price series over time by logging each live quote.
+   SPCX is too new for free history APIs, but the live quote is real — so we
+   record one point per day (seeded at the IPO), and the chart draws that. */
+function recordRealHistory(d) {
+  if (d == null || d.price == null || isNaN(d.price)) return;
+  const DAY = 86400000;
+  const store = load(LS.realHist, null) || { series: [{ t: Date.parse(IPO_DATE), v: IPO_PRICE }] };
+  if (!Array.isArray(store.series)) store.series = [{ t: Date.parse(IPO_DATE), v: IPO_PRICE }];
+  const today = Math.floor(Date.now() / DAY) * DAY;
+  const upsert = (t, v) => {
+    if (v == null || isNaN(v)) return;
+    const i = store.series.findIndex((p) => p.t === t);
+    if (i >= 0) store.series[i].v = v; else store.series.push({ t, v });
+  };
+  if (d.prevClose != null) upsert(today - DAY, d.prevClose); // fill yesterday's close
+  upsert(today, d.price);
+  store.series.sort((a, b) => a.t - b.t);
+  save(LS.realHist, store);
 }
 
 function renderPrice(d, ts, stale) {

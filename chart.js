@@ -38,7 +38,12 @@
       } catch (e) { /* fall through */ }
     }
 
-    // 2) Stooq keyless daily history (may be CORS-blocked; that's fine).
+    // 2) Real closes recorded from the live quote (works even when no history
+    //    API carries this brand-new symbol). Always include today's live quote.
+    const real = buildRecordedSeries();
+    if (real.length >= 2) return cache({ source: 'Live quote (recorded daily)', series: real });
+
+    // 3) Stooq keyless daily history (may be CORS-blocked; that's fine).
     try {
       const r = await fetch('https://stooq.com/q/d/l/?s=spcx.us&i=d');
       if (r.ok) {
@@ -52,8 +57,24 @@
       }
     } catch (e) { /* fall through to synth */ }
 
-    // 3) No real source available — deterministic placeholder walk.
+    // 4) No real source available — deterministic placeholder walk.
     return cache({ source: 'Sample data (no live history)', series: synth() });
+  }
+
+  // Combine the recorded daily series with the current live quote so the chart
+  // has real points (IPO anchor + today at minimum) without any history API.
+  function buildRecordedSeries() {
+    const stored = safeParse(localStorage.getItem('spcx.realHist'));
+    const series = (stored && Array.isArray(stored.series)) ? stored.series.slice()
+      : [{ t: Date.parse(SPCXData().ipo.date), v: SPCXData().ipo.price }];
+    const q = SPCXData().price && SPCXData().price();
+    if (q && q.data && q.data.price != null) {
+      const today = Math.floor(Date.now() / DAY) * DAY;
+      const i = series.findIndex((p) => p.t === today);
+      if (i >= 0) series[i] = { t: today, v: q.data.price };
+      else series.push({ t: today, v: q.data.price });
+    }
+    return series.filter((p) => p.t && p.v != null).sort((a, b) => a.t - b.t);
   }
 
   function cache(out) {
